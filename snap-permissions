@@ -3,7 +3,7 @@
 export LC_ALL=C
 
 if ! command -v yad &> /dev/null; then
-    echo "Bitte installiere 'yad'"
+    echo "Please install 'yad'"
     exit 1
 fi
 
