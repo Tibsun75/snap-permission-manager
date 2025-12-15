@@ -44,7 +44,10 @@ Terminal UI version using **dialog** (black & white theme).
 ## Installation
 
 Download Files 
+
 Install yad and dialog on your system
+
+
 set execute permission with :
 ```bash
 chmod +x
