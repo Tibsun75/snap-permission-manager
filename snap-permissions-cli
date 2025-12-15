@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# 1. Force English language for buttons
+export LC_ALL=C
+
+# 2. Check for dependencies
+if ! command -v dialog &> /dev/null; then
+    echo "Please install 'dialog' (e.g., sudo apt install dialog)"
+    exit 1
+fi
+
+# 3. B&W Theme Configuration
+export DIALOGRC=$(mktemp)
+cat <<EOF > "$DIALOGRC"
+use_shadow = OFF
+use_colors = ON
+screen_color = (WHITE,BLACK,OFF)
+dialog_color = (BLACK,WHITE,OFF)
+title_color = (BLACK,WHITE,ON)
+border_color = (BLACK,WHITE,ON)
+button_active_color = (WHITE,BLACK,ON)
+button_inactive_color = (BLACK,WHITE,OFF)
+tag_color = (BLACK,WHITE,ON)
+item_color = (BLACK,WHITE,OFF)
+item_selected_color = (WHITE,BLACK,ON)
+menubox_color = (BLACK,WHITE,OFF)
+menubox_border_color = (BLACK,WHITE,ON)
+EOF
+
+# Temporary file for error messages
+TMP_ERR=$(mktemp)
+trap 'rm -f "$TMP_ERR" "$DIALOGRC"' EXIT
+
+# Helper function for message boxes
+msg() {
+    dialog --title "Snap Manager - Info" --msgbox "$1" 10 70
+}
+
+# ---------- Snap Selection (FILTERED) ----------
+select_snap() {
+    # Filtert 'core', 'bare' und 'snapd' aus der Liste heraus
+    local ITEMS=$(snap list | awk 'NR>1 && $1 !~ /^(core|bare|snapd)/ {print $1, "["$2"]"}')
+    
+    if [ -z "$ITEMS" ]; then
+        msg "No manageable snaps found (Base snaps are hidden)."
+        return 1
+    fi
+
+    dialog --stdout \
+        --title "Installed Snaps" \
+        --backtitle "Snap Connection Manager (B&W)" \
+        --menu "Choose an app to manage:" \
+        20 70 12 \
+        $ITEMS
+}
+
+# ---------- Connection Selection ----------
+select_connection() {
+    local SNAP="$1"
+    # Listet die Verbindungen auf
+    local ITEMS=$(snap connections "$SNAP" | awk -v s="$SNAP" '
+        NR>1 {
+            interface=$1; plug=$2; slot=$3;
+            status=(slot=="" || slot=="-" ? "[OFF]" : "[ON]");
+            print plug, status "->(" interface ":" (slot==""?"-":slot) ")"
+        }')
+
+    if [ -z "$ITEMS" ]; then
+        msg "No connections found for \"$SNAP\"."
+        return 1
+    fi
+
+    dialog --stdout \
+        --title "Connections for $SNAP" \
+        --menu "Select an interface (Plug):" \
+        20 90 12 \
+        $ITEMS
+}
+
+# ---------- Manage Connection ----------
+manage_connection() {
+    local PLUG="$1"
+    local CURRENT_SLOT=$(snap connections | grep " $PLUG " | awk '{print $3}' | grep -v '^-$')
+
+    if [ -z "$CURRENT_SLOT" ]; then
+        dialog --title "Connect Interface" \
+               --yesno "Interface '$PLUG' is DISCONNECTED.\n\nConnect it?" 10 60
+        
+        if [ $? -eq 0 ]; then
+            dialog --infobox "Connecting..." 3 40
+            if sudo snap connect "$PLUG" 2>"$TMP_ERR"; then
+                msg "Successfully connected!"
+            else
+                msg "Error:\n$(cat "$TMP_ERR")"
+            fi
+        fi
+    else
+        dialog --title "Disconnect Interface" \
+               --yesno "Interface '$PLUG' is CONNECTED.\n\nDisconnect it?" 10 60
+        
+        if [ $? -eq 0 ]; then
+            dialog --infobox "Disconnecting..." 3 40
+            if sudo snap disconnect "$PLUG" 2>"$TMP_ERR"; then
+                msg "Successfully disconnected."
+            else
+                msg "Error:\n$(cat "$TMP_ERR")"
+            fi
+        fi
+    fi
+}
+
+# ---------- Main Logic ----------
+if [ -n "$1" ]; then
+    if ! snap list "$1" &> /dev/null; then
+        echo "Error: Snap '$1' is not installed."
+        exit 1
+    fi
+    while true; do
+        SELECTED_CONN=$(select_connection "$1")
+        [[ $? -ne 0 || -z "$SELECTED_CONN" ]] && break
+        manage_connection "$SELECTED_CONN"
+    done
+else
+    while true; do
+        SELECTED_SNAP=$(select_snap)
+        [[ $? -ne 0 || -z "$SELECTED_SNAP" ]] && break
+
+        while true; do
+            SELECTED_CONN=$(select_connection "$SELECTED_SNAP")
+            [[ $? -ne 0 || -z "$SELECTED_CONN" ]] && break
+            manage_connection "$SELECTED_CONN"
+        done
+    done
+fi
+
+clear
+echo "Snap Manager closed."

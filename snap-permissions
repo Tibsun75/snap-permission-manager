@@ -1,0 +1,117 @@
+#!/bin/bash
+
+export LC_ALL=C
+
+if ! command -v yad &> /dev/null; then
+    echo "Bitte installiere 'yad'"
+    exit 1
+fi
+
+TMP_ERR=$(mktemp)
+trap 'rm -f "$TMP_ERR"' EXIT
+
+msg() {
+    yad --title="Snap Manager" --image="info" --text="$1" --button="OK:0" --width=700 --center
+}
+
+# Hilfsfunktion für sudo-Befehle mit grafischer Abfrage
+run_as_root() {
+    # Versucht erst pkexec (Standard für GUI), falls nicht vorhanden, normales sudo
+    if command -v pkexec &> /dev/null; then
+        pkexec bash -c "$1"
+    else
+        # Fallback: Einfaches yad-Passwortfenster
+        PASS=$(yad --entry --title="Authentication" --text="Enter Password for Sudo:" --hide-text --button="OK:0" --button="Cancel:1" --center)
+        if [ $? -eq 0 ]; then
+            echo "$PASS" | sudo -S bash -c "$1"
+        else
+            return 1
+        fi
+    fi
+}
+
+# ---------- Snap Auswahl ----------
+select_snap() {
+    local ITEMS=$(snap list | awk 'NR>1 && $1 !~ /^(core|bare|snapd)/ {print $1 "\n" $2}')
+    [ -z "$ITEMS" ] && return 1
+
+    yad --list \
+        --title="Snap Manager" \
+        --text="Choose an app to manage:" \
+        --column="Snap Name" --column="Version" \
+        --print-column=1 --width=600 --height=600  --separator="" \
+        $ITEMS
+}
+
+# ---------- Verbindung Auswahl ----------
+select_connection() {
+    local SNAP="$1"
+    local ITEMS=$(snap connections "$SNAP" | awk '
+        NR>1 {
+            interface=$1; plug=$2; slot=$3;
+            status=(slot=="" || slot=="-" ? "OFF" : "ON");
+            print plug "\n" status "\n" interface ":" (slot==""?"-":slot)
+        }')
+
+    [ -z "$ITEMS" ] && return 1
+
+    yad --list \
+        --title="Connections: $SNAP" \
+        --text="Select an interface (Plug) to toggle:" \
+        --column="Plug" --column="Status" --column="Interface:Slot" \
+        --print-column=1 --width=600 --height=600  --separator="" \
+        $ITEMS
+}
+
+# ---------- Verbindung verwalten ----------
+manage_connection() {
+    local PLUG="$1"
+    local CURRENT_SLOT=$(snap connections | awk -v p="$PLUG" '$2 == p {print $3}' | grep -v '^-$' | head -n 1)
+
+    if [ -z "$CURRENT_SLOT" ]; then
+        yad --title="Connect Interface" \
+            --text="Interface <b>$PLUG</b> is DISCONNECTED.\n\nConnect it?" \
+            --image="question" --button="Cancel:1" --button="Connect:0" --center
+        
+        if [ $? -eq 0 ]; then
+            # Aufruf über die neue Root-Funktion
+            if run_as_root "snap connect $PLUG" 2>"$TMP_ERR"; then
+                msg "Successfully connected!"
+            else
+                msg "<b>Error:</b>\n\n$(cat "$TMP_ERR")"
+            fi
+        fi
+    else
+        yad --title="Disconnect Interface" \
+            --text="Interface <b>$PLUG</b> is CONNECTED.\n\nDisconnect it?" \
+            --image="warning" --button="Cancel:1" --button="Disconnect:0" --center
+        
+        if [ $? -eq 0 ]; then
+            # Aufruf über die neue Root-Funktion
+            if run_as_root "snap disconnect $PLUG" 2>"$TMP_ERR"; then
+                msg "Successfully disconnected."
+            else
+                msg "<b>Error:</b>\n\n$(cat "$TMP_ERR")"
+            fi
+        fi
+    fi
+}
+
+# ---------- Hauptlogik ----------
+if [ -n "$1" ]; then
+    while true; do
+        SELECTED_CONN=$(select_connection "$1")
+        [[ -z "$SELECTED_CONN" ]] && break
+        manage_connection "$SELECTED_CONN"
+    done
+else
+    while true; do
+        SELECTED_SNAP=$(select_snap)
+        [[ -z "$SELECTED_SNAP" ]] && break
+        while true; do
+            SELECTED_CONN=$(select_connection "$SELECTED_SNAP")
+            [[ -z "$SELECTED_CONN" ]] && break
+            manage_connection "$SELECTED_CONN"
+        done
+    done
+fi
