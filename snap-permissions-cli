@@ -5,7 +5,7 @@ export LC_ALL=C
 
 # 2. Check for dependencies
 if ! command -v dialog &> /dev/null; then
-    echo "Please install 'dialog' (e.g., sudo apt install dialog)"
+    echo "Please install 'dialog' "
     exit 1
 fi
 
